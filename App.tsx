@@ -1,13 +1,14 @@
-
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Timestamp } from 'firebase/firestore';
-import type { RawFuelEntry, ProcessedFuelEntry, MaintenanceData } from './types.ts';
+import type { RawFuelEntry, ProcessedFuelEntry, MaintenanceEvent } from './types.ts';
+import { ServiceType } from './types.ts';
 import { EntryModal } from './components/EntryModal.tsx';
 import { TripModal } from './components/TripModal.tsx';
 import { MaintenanceModal } from './components/MaintenanceModal.tsx';
 import { MonthSummary } from './components/MonthSummary.tsx';
 import { EntryDetailModal } from './components/EntryDetailModal.tsx';
 import { LoginScreen } from './components/LoginScreen.tsx';
+import { AnalyticsCharts } from './components/AnalyticsCharts.tsx';
 import { FuelPumpIcon, UserIcon, DollarSignIcon, GaugeIcon, RoadIcon, PlusIcon, CalculatorIcon, WrenchIcon, EditIcon, ExportIcon } from './components/Icons.tsx';
 
 const StatsCard: React.FC<{ icon: React.ReactNode; label: string; value: string; }> = ({ icon, label, value }) => (
@@ -23,7 +24,7 @@ const StatsCard: React.FC<{ icon: React.ReactNode; label: string; value: string;
 const App: React.FC = () => {
     const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('isLoggedIn') === 'true');
     const [rawEntries, setRawEntries] = useState<RawFuelEntry[]>([]);
-    const [maintenanceData, setMaintenanceData] = useState<MaintenanceData>({ oil: 0, tires: 0, engine: 0 });
+    const [maintenanceLog, setMaintenanceLog] = useState<MaintenanceEvent[]>([]);
     const [activeModal, setActiveModal] = useState<'entry' | 'trip' | 'maintenance' | 'detail' | null>(null);
     const [selectedEntry, setSelectedEntry] = useState<ProcessedFuelEntry | null>(null);
     const [entryToEdit, setEntryToEdit] = useState<RawFuelEntry | null>(null);
@@ -37,32 +38,41 @@ const App: React.FC = () => {
     useEffect(() => {
         if (!isLoggedIn) return;
         try {
-            const storedEntries = localStorage.getItem('fuelEntries');
-            if (storedEntries) {
-                const parsed = JSON.parse(storedEntries).map((e: any) => ({
+            const storedData = localStorage.getItem('fuelControlData');
+            if (storedData) {
+                const { entries, maintenance } = JSON.parse(storedData);
+                const parsedEntries = entries.map((e: any) => ({
                     ...e,
                     date: new Timestamp(e.date.seconds, e.date.nanoseconds),
                 }));
-                setRawEntries(parsed);
+                 const parsedMaintenance = maintenance.map((m: any) => ({
+                    ...m,
+                    date: new Timestamp(m.date.seconds, m.date.nanoseconds),
+                }));
+                setRawEntries(parsedEntries);
+                setMaintenanceLog(parsedMaintenance);
             } else {
-               // Pre-load with initial data if nothing is stored
-                setRawEntries(getInitialSeedData());
+                const { initialEntries, initialMaintenance } = getInitialSeedData();
+                setRawEntries(initialEntries);
+                setMaintenanceLog(initialMaintenance);
             }
-            const storedMaintenance = localStorage.getItem('maintenanceData');
-            if (storedMaintenance) setMaintenanceData(JSON.parse(storedMaintenance));
         } catch (error) {
             console.error("Failed to load data from localStorage", error);
-            setRawEntries(getInitialSeedData());
+            const { initialEntries, initialMaintenance } = getInitialSeedData();
+            setRawEntries(initialEntries);
+            setMaintenanceLog(initialMaintenance);
         }
     }, [isLoggedIn]);
 
     useEffect(() => {
-        if (isLoggedIn) localStorage.setItem('fuelEntries', JSON.stringify(rawEntries));
-    }, [rawEntries, isLoggedIn]);
-
-    useEffect(() => {
-        if (isLoggedIn) localStorage.setItem('maintenanceData', JSON.stringify(maintenanceData));
-    }, [maintenanceData, isLoggedIn]);
+        if (isLoggedIn) {
+            const dataToStore = {
+                entries: rawEntries,
+                maintenance: maintenanceLog,
+            };
+            localStorage.setItem('fuelControlData', JSON.stringify(dataToStore));
+        }
+    }, [rawEntries, maintenanceLog, isLoggedIn]);
 
     const processedEntries = useMemo((): ProcessedFuelEntry[] => {
         const sorted = [...rawEntries].sort((a, b) => a.date.toMillis() - b.date.toMillis() || a.kmEnd - b.kmEnd);
@@ -126,18 +136,21 @@ const App: React.FC = () => {
     
     const maintenanceReminders = useMemo(() => {
         const items = [
-            { id: 'oil', name: 'Troca de Óleo', interval: 10000, warning: 1000 },
-            { id: 'tires', name: 'Troca de Pneus', interval: 25000, warning: 1000 },
-            { id: 'engine', name: 'Revisão do Motor', interval: 50000, warning: 2000 }
+            { id: ServiceType.OIL_CHANGE, name: 'Troca de Óleo', interval: 10000, warning: 1000 },
+            { id: ServiceType.TIRE_CHANGE, name: 'Troca de Pneus', interval: 25000, warning: 1000 },
+            { id: ServiceType.ENGINE_REVIEW, name: 'Revisão do Motor', interval: 50000, warning: 2000 }
         ];
 
-        if (!currentMileage) return [];
-
+        if (!currentMileage || maintenanceLog.length === 0) return [];
+        
         return items.map(item => {
-            const lastServiceKm = maintenanceData[item.id as keyof MaintenanceData] || 0;
-            if (lastServiceKm === 0) return null;
+            const lastService = maintenanceLog
+                .filter(log => log.serviceType === item.id)
+                .sort((a, b) => b.date.toMillis() - a.date.toMillis())[0];
 
-            const nextServiceKm = lastServiceKm + item.interval;
+            if (!lastService) return null;
+
+            const nextServiceKm = lastService.mileage + item.interval;
             const kmRemaining = nextServiceKm - currentMileage;
 
             let status = 'ok';
@@ -154,7 +167,7 @@ const App: React.FC = () => {
             return { ...item, status, message };
         }).filter((item): item is NonNullable<typeof item> => item !== null && item.status !== 'ok');
 
-    }, [currentMileage, maintenanceData]);
+    }, [currentMileage, maintenanceLog]);
     
     const handleCloseModal = useCallback(() => {
         setActiveModal(null);
@@ -177,10 +190,19 @@ const App: React.FC = () => {
         handleCloseModal();
     }, [handleCloseModal]);
 
-    const handleSaveMaintenance = useCallback((data: MaintenanceData) => {
-        setMaintenanceData(data);
+    const handleSaveMaintenance = useCallback((event: Omit<MaintenanceEvent, 'id'> & { id?: string }) => {
+        setMaintenanceLog(prev => {
+            if (event.id) {
+                return prev.map(e => e.id === event.id ? { ...e, ...event } as MaintenanceEvent : e);
+            }
+            return [...prev, { ...event, id: Date.now().toString() } as MaintenanceEvent];
+        });
     }, []);
     
+    const handleDeleteMaintenance = useCallback((id: string) => {
+         setMaintenanceLog(prev => prev.filter(e => e.id !== id));
+    }, []);
+
     const handleExportCSV = useCallback(() => {
         if (rawEntries.length === 0) {
             alert("Não há dados para exportar.");
@@ -272,6 +294,8 @@ const App: React.FC = () => {
                        <StatsCard icon={<GaugeIcon />} label={`Média ${monthFilter === 'all' ? 'Geral' : 'do Mês'}`} value={`${displayStats.averageKmpl.toFixed(1)} km/L`} />
                     </div>
                 </section>
+                
+                <AnalyticsCharts entries={processedEntries} />
 
                 {maintenanceReminders.length > 0 && (
                     <section className="mb-8">
@@ -402,8 +426,9 @@ const App: React.FC = () => {
                     isOpen={activeModal === 'maintenance'}
                     onClose={handleCloseModal}
                     onSave={handleSaveMaintenance}
+                    onDelete={handleDeleteMaintenance}
+                    log={maintenanceLog}
                     currentMileage={currentMileage}
-                    initialData={maintenanceData}
                 />
             )}
             {selectedEntry && (
@@ -420,16 +445,22 @@ const App: React.FC = () => {
 };
 
 // Seed data function in case localStorage is empty
-const getInitialSeedData = (): RawFuelEntry[] => {
-    return [
-        // April 2024 Data
+const getInitialSeedData = () => {
+    const initialEntries: RawFuelEntry[] = [
         { id: '1', date: Timestamp.fromDate(new Date('2024-04-12T00:00:00Z')), totalValue: 100.00, pricePerLiter: 6.19, kmEnd: 134620, fuelType: 'GASOLINA' as any, notes: 'Posto Shell' },
         { id: '2', date: Timestamp.fromDate(new Date('2024-04-14T00:00:00Z')), totalValue: 100.00, pricePerLiter: 6.19, kmEnd: 134843, fuelType: 'GASOLINA' as any, notes: '' },
         { id: '3', date: Timestamp.fromDate(new Date('2024-04-16T00:00:00Z')), totalValue: 50.00, pricePerLiter: 5.89, kmEnd: 134932, fuelType: 'GASOLINA' as any, notes: '' },
-        // May 2024 Data
         { id: '4', date: Timestamp.fromDate(new Date('2024-05-22T00:00:00Z')), totalValue: 50.00, pricePerLiter: 6.19, kmEnd: 135010, fuelType: 'GASOLINA' as any, notes: 'Viagem' },
-        { id: '5', date: Timestamp.fromDate(new Date('2024-05-29T00:00:00Z')), totalValue: 273.82, pricePerLiter: 5.75, kmEnd: 135193, fuelType: 'GASOLINA' as any, notes: '' }
+        { id: '5', date: Timestamp.fromDate(new Date('2024-05-29T00:00:00Z')), totalValue: 273.82, pricePerLiter: 5.75, kmEnd: 135193, fuelType: 'GASOLINA' as any, notes: '' },
+        { id: '6', date: Timestamp.fromDate(new Date('2024-06-05T00:00:00Z')), totalValue: 150.00, pricePerLiter: 5.85, kmEnd: 135500, fuelType: 'GASOLINA' as any, notes: '' }
     ];
+
+    const initialMaintenance: MaintenanceEvent[] = [
+        { id: 'm1', date: Timestamp.fromDate(new Date('2024-01-15T00:00:00Z')), serviceType: ServiceType.OIL_CHANGE, mileage: 130000, cost: 250, notes: 'Óleo 5W30 Sintético' },
+        { id: 'm2', date: Timestamp.fromDate(new Date('2023-10-20T00:00:00Z')), serviceType: ServiceType.TIRE_CHANGE, mileage: 125000, cost: 1200, notes: '4 Pneus Michelin' },
+    ];
+    
+    return { initialEntries, initialMaintenance };
 };
 
 export default App;

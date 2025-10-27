@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 const iconStyle: React.CSSProperties = { width: '1.25em', height: '1.25em', verticalAlign: 'middle' };
@@ -157,6 +156,32 @@ export const ExportIcon = () => (
         <path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" stroke="#60a5fa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         <path d="M12 3v12m-4-4l4 4 4-4" stroke="#93c5fd" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         <path d="M7 3H17" fill="#374151" stroke="#4b5563"/>
+    </svg>
+);
+
+export const OilCanIcon = () => (
+    <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M20 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5" stroke="#facc15" strokeWidth="2"/>
+        <path d="M20 13h-4.2c-.3 0-.5-.2-.6-.4l-1.4-3.5c-.2-.4-.1-.8.2-1.1L18 5" stroke="#facc15" strokeWidth="2"/>
+        <path d="M12 11h8" stroke="#facc15" strokeWidth="2"/>
+        <path d="M4 11V9a2 2 0 0 1 2-2h4" stroke="#facc15" strokeWidth="2" strokeLinecap="round"/>
+        <path d="M10 7L8 4" stroke="#facc15" strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+);
+
+export const TireIcon = () => (
+    <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="10" stroke="#9ca3af" strokeWidth="2"/>
+        <circle cx="12" cy="12" r="4" stroke="#9ca3af" strokeWidth="2"/>
+        <path d="M12 2v4M12 18v4M22 12h-4M6 12H2" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+);
+
+export const EngineIcon = () => (
+    <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M5 18H3v-2h2v2zM5 14H3v-2h2v2zM12 12V9" stroke="#f87171" strokeWidth="2" strokeLinecap="round" />
+        <path d="M21 10V8a2 2 0 0 0-2-2h-2" stroke="#f87171" strokeWidth="2" strokeLinecap="round" />
+        <path d="M12 18h-2a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h2v8zM17 18h-5v-8h5a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2z" stroke="#f87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
 );
 

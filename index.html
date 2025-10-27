@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
@@ -6,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meu Combustivel AI</title>
     <meta name="theme-color" content="#111827">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M20 12 C20 8 23 5 27 5 L62 5 C66 5 69 8 69 12 L69 70 L82 70 L82 76 C82 80 79 83 75 83 L34 83 C30 83 27 80 27 76 L27 70 L20 70 Z' fill='%2322c55e'></path><rect x='27' y='18' width='35' height='20' rx='3' fill='%23111827'></rect><path d='M69 45 L90 45 C92 45 94 47 94 49 L94 60 C94 62 92 64 90 64 L69 64 Z' fill='%23374151'></path></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -56,6 +56,9 @@
             transform: translateY(-4px);
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
         }
+        .recharts-tooltip-cursor {
+            fill: rgba(255, 255, 255, 0.1);
+        }
     </style>
 <script type="importmap">
 {
@@ -63,13 +66,1698 @@
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0",
     "@google/genai": "https://aistudiocdn.com/@google/genai@^1.27.0",
-    "firebase/": "https://aistudiocdn.com/firebase@^12.4.0/"
+    "firebase/": "https://aistudiocdn.com/firebase@^12.4.0/",
+    "recharts": "https://aistudiocdn.com/recharts@^2.12.7"
   }
 }
 </script>
 </head>
 <body class="bg-[#111827] text-gray-200">
     <div id="root"></div>
+
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel" data-type="module" data-module-path="/types.ts"><![CDATA[
+    import { Timestamp } from 'firebase/firestore';
+
+    export enum FuelType {
+        ETHANOL = 'ETANOL',
+        GASOLINE = 'GASOLINA',
+    }
+
+    export interface RawFuelEntry {
+        id: string;
+        date: Timestamp;
+        totalValue: number;
+        pricePerLiter: number;
+        kmEnd: number;
+        fuelType: FuelType;
+        notes: string;
+    }
+
+    export interface ProcessedFuelEntry extends RawFuelEntry {
+        date: Date;
+        liters: number;
+        kmStart: number;
+        distance: number;
+        avgKmpl: number;
+    }
+
+    export enum ServiceType {
+        OIL_CHANGE = 'Troca de Óleo',
+        TIRE_CHANGE = 'Troca de Pneus',
+        ENGINE_REVIEW = 'Revisão do Motor',
+        GENERAL = 'Revisão Geral',
+        OTHER = 'Outro',
+    }
+
+    export interface MaintenanceEvent {
+        id: string;
+        date: Timestamp;
+        serviceType: ServiceType;
+        mileage: number;
+        cost: number;
+        notes: string;
+    }
+    ]]></script>
+
+    <script type="text/babel" data-type="module" data-module-path="/services/geminiService.ts"><![CDATA[
+    import { GoogleGenAI } from "@google/genai";
+    import type { ProcessedFuelEntry } from '/types.ts';
+
+    const API_KEY = process.env.API_KEY;
+
+    const ai = new GoogleGenAI({ apiKey: API_KEY });
+    const model = 'gemini-2.5-flash';
+
+    export const getAnalysisFromGemini = async (entries: ProcessedFuelEntry[], monthName: string): Promise<string> => {
+        if (!API_KEY) {
+            return "A funcionalidade de IA está desativada. Por favor, configure sua API Key.";
+        }
+
+        const dataSummary = entries.map(e => ({
+            dia: e.date.getUTCDate(),
+            gasto: e.totalValue.toFixed(2),
+            media_km_l: e.avgKmpl.toFixed(1),
+            combustivel: e.fuelType
+        }));
+
+        const systemInstruction = "Você é um assistente especialista em análise de dados automotivos e finanças pessoais. Sua tarefa é analisar os dados de abastecimento de um usuário para um mês específico e fornecer um resumo claro, conciso e útil em português do Brasil. Use um tom amigável e informativo. Formate sua resposta com parágrafos, listas e use a tag <strong> para destaques.";
+        const userQuery = `Aqui estão os dados de abastecimento para ${monthName}:\n\n${JSON.stringify(dataSummary)}\n\nCom base nesses dados, gere uma análise que inclua:\n1. Um breve resumo geral do mês (gasto total, distância percorrida).\n2. O dia em que o gasto com combustível foi maior.\n3. A melhor e a pior média de consumo (km/L) registrada.\n4. Uma dica prática e personalizada para ajudar o usuário a economizar combustível, com base nos padrões observados.`;
+
+        try {
+            const response = await ai.models.generateContent({
+                model: model,
+                contents: userQuery,
+                config: {
+                    systemInstruction: systemInstruction,
+                },
+            });
+            return response.text;
+        } catch (error) {
+            console.error("Erro ao chamar a API Gemini para análise:", error);
+            return "Desculpe, não foi possível completar a análise no momento. Verifique a configuração da API e tente novamente mais tarde.";
+        }
+    };
+
+    export const getTripEstimateFromGemini = async (distance: number, avgKmpl: number): Promise<string> => {
+        if (!API_KEY) {
+            return "A funcionalidade de IA está desativada. Por favor, configure sua API Key.";
+        }
+        const systemInstruction = "Você é um assistente de planejamento de viagens. Sua tarefa é calcular o custo de uma viagem de carro e fornecer dicas úteis. Assuma um preço médio de R$ 5,80 por litro de gasolina para o cálculo.";
+        const userQuery = `Preciso estimar o custo de uma viagem de ${distance} km. O consumo médio do meu carro é de ${avgKmpl.toFixed(1)} km/L. Com base no preço médio de R$ 5,80 por litro de gasolina, calcule o custo total da viagem. Apresente o resultado de forma clara, incluindo o preço do combustível assumido, os litros necessários e o custo final. Adicione também 2 dicas para uma direção mais econômica durante a viagem. Use a tag <strong> para destaques.`;
+
+        try {
+            const response = await ai.models.generateContent({
+                model: model,
+                contents: userQuery,
+                config: {
+                    systemInstruction: systemInstruction,
+                },
+            });
+            return response.text;
+        } catch (error) {
+            console.error("Erro ao chamar a API Gemini para estimativa:", error);
+            return "Desculpe, não foi possível completar a estimativa no momento. Verifique a configuração da API e tente novamente mais tarde.";
+        }
+    };
+    ]]></script>
+
+    <script type="text/babel" data-type="module" data-module-path="/components/Icons.tsx"><![CDATA[
+    import React from 'react';
+
+    const iconStyle: React.CSSProperties = { width: '1.25em', height: '1.25em', verticalAlign: 'middle' };
+
+    export const PlusIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="plusGradient" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="#4ade80" />
+                    <stop offset="100%" stopColor="#16a34a" />
+                </linearGradient>
+                <filter id="plusShadow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feDropShadow dx="0.5" dy="1" stdDeviation="1" floodColor="#000000" floodOpacity="0.3"/>
+                </filter>
+            </defs>
+            <circle cx="12" cy="12" r="11" fill="url(#plusGradient)" filter="url(#plusShadow)"/>
+            <path d="M12 7V17M7 12H17" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+    );
+
+    export const WrenchIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="wrenchGradient" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="#d1d5db" />
+                    <stop offset="100%" stopColor="#9ca3af" />
+                </linearGradient>
+                     <filter id="wrenchShadow" x="-20%" y="-20%" width="140%" height="140%">
+                        <feDropShadow dx="0.5" dy="1" stdDeviation="1" floodColor="#000000" floodOpacity="0.2"/>
+                    </filter>
+            </defs>
+            <path filter="url(#wrenchShadow)" d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" fill="url(#wrenchGradient)" stroke="#4b5563" strokeWidth="0.5"/>
+        </svg>
+    );
+
+    export const CalculatorIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4" y="2" width="16" height="20" rx="3" fill="#374151" stroke="#4b5563" strokeWidth="0.5"/>
+            <rect x="6" y="10" width="3" height="3" rx="1" fill="#4ade80"/>
+            <rect x="10.5" y="10" width="3" height="3" rx="1" fill="#facc15"/>
+            <rect x="15" y="10" width="3" height="3" rx="1" fill="#60a5fa"/>
+            <rect x="6" y="15" width="3" height="3" rx="1" fill="#f87171"/>
+            <rect x="10.5" y="15" width="7.5" height="3" rx="1" fill="#4ade80"/>
+            <rect x="6" y="4" width="12" height="4" rx="1" fill="#111827"/>
+        </svg>
+    );
+
+    export const DollarSignIcon = () => (
+         <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="dollarGradient" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="#facc15" />
+                    <stop offset="100%" stopColor="#fbbf24" />
+                </linearGradient>
+                <filter id="dollarShadow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feDropShadow dx="1" dy="1" stdDeviation="0.5" floodColor="#000000" floodOpacity="0.4"/>
+                </filter>
+            </defs>
+            <path filter="url(#dollarShadow)" d="M12 2.5V21.5M17 5.5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" stroke="url(#dollarGradient)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+    );
+
+    export const UserIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="userGradient" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="#93c5fd" />
+                    <stop offset="100%" stopColor="#60a5fa" />
+                </linearGradient>
+            </defs>
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" fill="url(#userGradient)" fillOpacity="0.3" stroke="url(#userGradient)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <circle cx="12" cy="7" r="4" fill="url(#userGradient)" stroke="url(#userGradient)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+    );
+
+    export const GaugeIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="gaugeGradient" x1="0" y1="1" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#4ade80" />
+                    <stop offset="50%" stopColor="#facc15" />
+                    <stop offset="100%" stopColor="#f87171" />
+                </linearGradient>
+            </defs>
+            <path d="M5.93 18.07A9 9 0 1 1 18.07 5.93" stroke="url(#gaugeGradient)" strokeWidth="4" strokeLinecap="round"/>
+            <circle cx="12" cy="12" r="1.5" fill="#f3f4f6"/>
+            <path d="M12 12 L16.5 7.5" stroke="#f3f4f6" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+    );
+
+    export const RoadIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 21L11 3H13L16 21" fill="#4b5563" />
+            <path d="M12 4V8" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+            <path d="M12 11V15" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+            <path d="M12 18V22" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+        </svg>
+    );
+
+    export const CloseIcon = ({size = 24}: {size?: number}) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="11" fill="#374151" fillOpacity="0.8"/>
+            <path d="M16 8L8 16M8 8L16 16" stroke="#e5e7eb" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+    );
+
+    export const SparklesIcon = () => (
+        <svg style={{width: '1em', height: '1em'}} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="sparkleGradient" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="#a78bfa" />
+                    <stop offset="100%" stopColor="#f472b6" />
+                </linearGradient>
+            </defs>
+            <path d="M12 2L9.5 7L4 8L9.5 9L12 14L14.5 9L20 8L14.5 7L12 2Z" fill="url(#sparkleGradient)"/>
+            <path d="M5 16L6.5 19L9 19.5L6.5 20L5 23L3.5 20L1 19.5L3.5 19L5 16Z" fill="url(#sparkleGradient)" fillOpacity="0.7"/>
+            <path d="M20 15L19 18L16 18.5L19 19L20 22L21 19L24 18.5L21 18L20 15Z" fill="url(#sparkleGradient)" fillOpacity="0.7"/>
+        </svg>
+    );
+
+    export const SearchIcon = () => (
+        <svg style={{width: '1em', height: '1em'}} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="searchGradient" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="#93c5fd" />
+                    <stop offset="100%" stopColor="#60a5fa" />
+                </linearGradient>
+            </defs>
+            <circle cx="10.5" cy="10.5" r="7.5" fill="url(#searchGradient)" fillOpacity="0.3" stroke="url(#searchGradient)" strokeWidth="2"/>
+            <path d="M16 16L21 21" stroke="#93c5fd" strokeWidth="2.5" strokeLinecap="round"/>
+        </svg>
+    );
+
+    export const EditIcon = ({size = 20}: {size?: number}) => (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" fill="#a78bfa" stroke="#8b5cf6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+    );
+
+    export const LoadingSpinner = () => (
+        <svg className="animate-spin -ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <defs>
+                <linearGradient id="spinnerGradient" x1="1" y1="1" x2="0" y2="0">
+                    <stop offset="0%" stopColor="#4ade80" />
+                    <stop offset="100%" stopColor="#1f2937" stopOpacity="0" />
+                </linearGradient>
+            </defs>
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="#4b5563" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="url(#spinnerGradient)" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+    );
+
+    export const ExportIcon = () => (
+         <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" stroke="#60a5fa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M12 3v12m-4-4l4 4 4-4" stroke="#93c5fd" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M7 3H17" fill="#374151" stroke="#4b5563"/>
+        </svg>
+    );
+
+    export const OilCanIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M20 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5" stroke="#facc15" strokeWidth="2"/>
+            <path d="M20 13h-4.2c-.3 0-.5-.2-.6-.4l-1.4-3.5c-.2-.4-.1-.8.2-1.1L18 5" stroke="#facc15" strokeWidth="2"/>
+            <path d="M12 11h8" stroke="#facc15" strokeWidth="2"/>
+            <path d="M4 11V9a2 2 0 0 1 2-2h4" stroke="#facc15" strokeWidth="2" strokeLinecap="round"/>
+            <path d="M10 7L8 4" stroke="#facc15" strokeWidth="2" strokeLinecap="round"/>
+        </svg>
+    );
+
+    export const TireIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10" stroke="#9ca3af" strokeWidth="2"/>
+            <circle cx="12" cy="12" r="4" stroke="#9ca3af" strokeWidth="2"/>
+            <path d="M12 2v4M12 18v4M22 12h-4M6 12H2" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round"/>
+        </svg>
+    );
+
+    export const EngineIcon = () => (
+        <svg style={iconStyle} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M5 18H3v-2h2v2zM5 14H3v-2h2v2zM12 12V9" stroke="#f87171" strokeWidth="2" strokeLinecap="round" />
+            <path d="M21 10V8a2 2 0 0 0-2-2h-2" stroke="#f87171" strokeWidth="2" strokeLinecap="round" />
+            <path d="M12 18h-2a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h2v8zM17 18h-5v-8h5a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2z" stroke="#f87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+
+    export const FuelPumpIcon = ({ size = 64, className = '' }: { size?: number; className?: string }) => (
+        <svg width={size} height={size} viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+            <defs>
+                <linearGradient id="pumpBodyGradient" x1="0.5" y1="0" x2="0.5" y2="1">
+                    <stop offset="0%" stopColor="#22c55e"/>
+                    <stop offset="100%" stopColor="#15803d"/>
+                </linearGradient>
+                <linearGradient id="pumpHandleGradient" x1="0.5" y1="0" x2="0.5" y2="1">
+                    <stop offset="0%" stopColor="#4b5563"/>
+                    <stop offset="100%" stopColor="#1f2937"/>
+                </linearGradient>
+                <filter id="pumpShadow" x="-10%" y="-10%" width="120%" height="130%">
+                    <feDropShadow dx="0" dy="4" stdDeviation="3" floodColor="#000" floodOpacity="0.4"/>
+                </filter>
+            </defs>
+            <g filter="url(#pumpShadow)">
+                {/* Main Body */}
+                <path d="M12 8C12 5.79086 13.7909 4 16 4H36C38.2091 4 40 5.79086 40 8V44H48V48C48 50.2091 46.2091 52 44 52H20C17.7909 52 16 50.2091 16 48V44H12V8Z" fill="url(#pumpBodyGradient)"/>
+                {/* Screen */}
+                <rect x="16" y="10" width="20" height="12" rx="2" fill="#111827" stroke="#4b5563" strokeWidth="1"/>
+                 {/* Screen glare */}
+                <path d="M17 10 L 26 22" stroke="white" strokeOpacity="0.1" strokeWidth="1.5" />
+                {/* Handle */}
+                <path d="M40 28H54C55.1046 28 56 28.8954 56 30V38C56 39.1046 55.1046 40 54 40H40V28Z" fill="url(#pumpHandleGradient)"/>
+                {/* Hose */}
+                <path d="M56 34H60V48C60 51.3137 57.3137 54 54 54H50" stroke="#374151" strokeWidth="5" strokeLinecap="round"/>
+            </g>
+        </svg>
+    );
+    ]]></script>
+
+    <script type="text/babel" data-type="module" data-module-path="/components/LoginScreen.tsx"><![CDATA[
+    import React from 'react';
+    import { FuelPumpIcon } from '/components/Icons.tsx';
+
+    interface LoginScreenProps {
+        onLogin: () => void;
+    }
+
+    export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
+        return (
+            <div className="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-green-900 to-black text-white p-4 text-center animate-fade-in">
+                <div className="mb-8 animate-slide-up-slow">
+                    <FuelPumpIcon size={80} className="text-white" />
+                </div>
+                <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight mb-3 animate-slide-up-slow" style={{ animationDelay: '100ms' }}>
+                    Meu Combustível
+                </h1>
+                <p className="text-lg text-gray-300 max-w-md mb-10 animate-slide-up-slow" style={{ animationDelay: '200ms' }}>
+                    Seu assistente inteligente para controle de gastos e manutenção veicular.
+                </p>
+                <button
+                    onClick={onLogin}
+                    className="w-full max-w-xs bg-white text-gray-900 font-bold py-4 px-6 rounded-xl shadow-2xl hover:bg-gray-200 transform hover:scale-105 transition-all duration-300 animate-slide-up-slow"
+                    style={{ animationDelay: '300ms' }}
+                >
+                    Entrar
+                </button>
+                <div className="absolute bottom-6 text-center text-gray-300 text-sm animate-slide-up-slow" style={{ animationDelay: '400ms' }}>
+                    <p>Desenvolvido por André Brito</p>
+                    <p>Versão 1.0</p>
+                </div>
+                <style>{`
+                    @keyframes fade-in {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                    .animate-fade-in {
+                        animation: fade-in 0.5s ease-out forwards;
+                    }
+
+                    @keyframes slide-up-slow {
+                        from {
+                            transform: translateY(20px);
+                            opacity: 0;
+                        }
+                        to {
+                            transform: translateY(0);
+                            opacity: 1;
+                        }
+                    }
+                    .animate-slide-up-slow {
+                        animation: slide-up-slow 0.6s ease-out forwards;
+                        opacity: 0;
+                    }
+                `}</style>
+            </div>
+        );
+    };
+    ]]></script>
+
+    <script type="text/babel" data-type="module" data-module-path="/components/EntryModal.tsx"><![CDATA[
+    import React, { useState, useEffect } from 'react';
+    import { CloseIcon } from '/components/Icons.tsx';
+    import type { RawFuelEntry, FuelType } from '/types.ts';
+    import { Timestamp } from 'firebase/firestore';
+
+    interface EntryModalProps {
+        isOpen: boolean;
+        onClose: () => void;
+        onSave: (entry: Omit<RawFuelEntry, 'id'> & { id?: string }) => void;
+        entryToEdit: RawFuelEntry | null;
+        lastKm: number;
+    }
+
+    const getTodayString = () => {
+        const today = new Date();
+        const offset = today.getTimezoneOffset();
+        const todayWithOffset = new Date(today.getTime() - (offset*60*1000));
+        return todayWithOffset.toISOString().split('T')[0];
+    }
+
+    export const EntryModal: React.FC<EntryModalProps> = ({ isOpen, onClose, onSave, entryToEdit, lastKm }) => {
+        const [formData, setFormData] = useState({
+            date: getTodayString(),
+            totalValue: '',
+            pricePerLiter: '',
+            kmEnd: '',
+            fuelType: 'GASOLINA' as FuelType,
+            notes: '',
+        });
+
+        useEffect(() => {
+            if (isOpen) {
+                if (entryToEdit) {
+                    const entryDate = entryToEdit.date.toDate();
+                    const offset = entryDate.getTimezoneOffset();
+                    const dateWithOffset = new Date(entryDate.getTime() - (offset*60*1000));
+
+                    setFormData({
+                        date: dateWithOffset.toISOString().split('T')[0],
+                        totalValue: String(entryToEdit.totalValue),
+                        pricePerLiter: String(entryToEdit.pricePerLiter),
+                        kmEnd: String(entryToEdit.kmEnd),
+                        fuelType: entryToEdit.fuelType,
+                        notes: entryToEdit.notes,
+                    });
+                } else {
+                     setFormData({
+                        date: getTodayString(),
+                        totalValue: '',
+                        pricePerLiter: '',
+                        kmEnd: lastKm > 0 ? '' : '',
+                        fuelType: 'GASOLINA' as FuelType,
+                        notes: '',
+                    });
+                }
+            }
+        }, [entryToEdit, isOpen, lastKm]);
+
+        const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+            const { name, value } = e.target;
+            setFormData(prev => ({ ...prev, [name]: value }));
+        };
+
+        const handleSubmit = (e: React.FormEvent) => {
+            e.preventDefault();
+            
+            const [year, month, day] = formData.date.split('-').map(Number);
+            // Corrige a data para ser UTC
+            const utcDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+            
+            const entryData = {
+                id: entryToEdit?.id,
+                date: Timestamp.fromDate(utcDate),
+                totalValue: parseFloat(formData.totalValue) || 0,
+                pricePerLiter: parseFloat(formData.pricePerLiter) || 0,
+                kmEnd: parseInt(formData.kmEnd) || 0,
+                fuelType: formData.fuelType,
+                notes: formData.notes,
+            };
+            onSave(entryData);
+        };
+
+        if (!isOpen) return null;
+
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 transition-opacity duration-300">
+                <div className="bg-[var(--theme-card-bg)] text-gray-200 rounded-xl shadow-2xl p-8 w-full max-w-md m-4 modal-content">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-white">{entryToEdit ? 'Editar' : 'Adicionar'} Abastecimento</h2>
+                        <button onClick={onClose} className="text-gray-400 hover:text-white"><CloseIcon /></button>
+                    </div>
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        <div>
+                            <label htmlFor="date" className="block text-sm font-medium text-gray-300">Data</label>
+                            <input type="date" name="date" id="date" value={formData.date} onChange={handleChange} required className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"/>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                             <div>
+                                <label htmlFor="totalValue" className="block text-sm font-medium text-gray-300">Valor Total (R$)</label>
+                                <input type="number" step="0.01" name="totalValue" id="totalValue" value={formData.totalValue} onChange={handleChange} placeholder="150.00" required className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"/>
+                            </div>
+                            <div>
+                                <label htmlFor="pricePerLiter" className="block text-sm font-medium text-gray-300">Preço/Litro (R$)</label>
+                                <input type="number" step="0.001" name="pricePerLiter" id="pricePerLiter" value={formData.pricePerLiter} onChange={handleChange} placeholder="5.80" required className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"/>
+                            </div>
+                        </div>
+                        <div>
+                            <label htmlFor="kmEnd" className="block text-sm font-medium text-gray-300">Odômetro (km)</label>
+                            <input type="number" name="kmEnd" id="kmEnd" value={formData.kmEnd} onChange={handleChange} placeholder={lastKm > 0 ? `Ex: ${lastKm + 350}` : '123456'} required className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"/>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300">Tipo de Combustível</label>
+                            <select name="fuelType" value={formData.fuelType} onChange={handleChange} className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]">
+                                <option value="GASOLINA">Gasolina</option>
+                                <option value="ETANOL">Etanol</option>
+                            </select>
+                        </div>
+                         <div>
+                            <label htmlFor="notes" className="block text-sm font-medium text-gray-300">Anotações</label>
+                            <textarea name="notes" id="notes" value={formData.notes} onChange={handleChange} rows={2} placeholder="Ex: Posto Ipiranga" className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"></textarea>
+                        </div>
+                        <div className="flex justify-end pt-2">
+                             <button type="submit" className="w-full bg-gradient-to-br from-[var(--theme-gradient-start)] to-[var(--theme-gradient-end)] text-white font-semibold py-3 px-5 rounded-lg shadow-md hover:opacity-90 transition-all">
+                                {entryToEdit ? 'Salvar Alterações' : 'Adicionar Registro'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        );
+    };
+    ]]></script>
+
+    <script type="text/babel" data-type="module" data-module-path="/components/EntryDetailModal.tsx"><![CDATA[
+    import React from 'react';
+    import type { ProcessedFuelEntry } from '/types.ts';
+    import { CloseIcon, EditIcon } from '/components/Icons.tsx';
+
+    interface EntryDetailModalProps {
+        isOpen: boolean;
+        onClose: () => void;
+        entry: ProcessedFuelEntry;
+        onEdit: (entry: ProcessedFuelEntry) => void;
+        onDelete: (id: string) => void;
+    }
+
+    export const EntryDetailModal: React.FC<EntryDetailModalProps> = ({ isOpen, onClose, entry, onEdit, onDelete }) => {
+        if (!isOpen) return null;
+
+        const handleDelete = () => {
+            if(window.confirm('Tem certeza que deseja excluir este registro?')) {
+                onDelete(entry.id);
+            }
+        }
+
+        return (
+             <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 transition-opacity duration-300">
+                 <div className="bg-[var(--theme-card-bg)] text-gray-200 rounded-xl shadow-2xl p-8 w-full max-w-md m-4 modal-content">
+                     <div className="flex justify-between items-center mb-6">
+                         <h2 className="text-2xl font-bold text-white">Detalhes do Registro</h2>
+                         <button onClick={onClose} className="text-gray-400 hover:text-white"><CloseIcon /></button>
+                     </div>
+                     <div className="space-y-4">
+                         <div className="bg-black/20 p-4 rounded-lg">
+                             <p className="text-sm text-gray-400">Data do Abastecimento</p>
+                             <p className="text-lg font-semibold">{entry.date.toLocaleDateString('pt-BR', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })}</p>
+                         </div>
+                         <div className="grid grid-cols-2 gap-4">
+                             <div className="bg-black/20 p-4 rounded-lg">
+                                 <p className="text-sm text-gray-400">Valor Total</p>
+                                 <p className="text-lg font-semibold">R$ {entry.totalValue.toFixed(2)}</p>
+                             </div>
+                             <div className="bg-black/20 p-4 rounded-lg">
+                                 <p className="text-sm text-gray-400">Preço/Litro</p>
+                                 <p className="text-lg font-semibold">R$ {entry.pricePerLiter.toFixed(3)}</p>
+                             </div>
+                         </div>
+                          <div className="grid grid-cols-2 gap-4">
+                             <div className="bg-black/20 p-4 rounded-lg">
+                                 <p className="text-sm text-gray-400">Litros</p>
+                                 <p className="text-lg font-semibold">{entry.liters.toFixed(2)} L</p>
+                             </div>
+                              <div className="bg-black/20 p-4 rounded-lg">
+                                 <p className="text-sm text-gray-400">Combustível</p>
+                                 <p className="text-lg font-semibold capitalize">{entry.fuelType.toLowerCase()}</p>
+                             </div>
+                         </div>
+                         <div className="bg-black/20 p-4 rounded-lg">
+                             <p className="text-sm text-gray-400">Odômetro neste Abastecimento</p>
+                             <p className="text-lg font-semibold">{entry.kmStart.toLocaleString('pt-BR')} km</p>
+                         </div>
+                         <div className="grid grid-cols-2 gap-4">
+                             <div className="bg-black/20 p-4 rounded-lg">
+                                 <p className="text-sm text-gray-400">Distância Percorrida</p>
+                                 <p className="text-lg font-semibold">{entry.distance > 0 ? `${entry.distance.toFixed(0)} km` : 'Aguardando'}</p>
+                             </div>
+                             <div className="bg-black/20 p-4 rounded-lg">
+                                 <p className="text-sm text-gray-400">Média de Consumo</p>
+                                 <p className="text-lg font-semibold">{entry.avgKmpl > 0 ? `${entry.avgKmpl.toFixed(1)} km/L` : 'Aguardando'}</p>
+                             </div>
+                         </div>
+                          {entry.notes && (
+                             <div className="bg-black/20 p-4 rounded-lg">
+                                 <p className="text-sm text-gray-400">Anotações</p>
+                                 <p className="text-lg">{entry.notes}</p>
+                             </div>
+                         )}
+                         <div className="flex justify-between items-center pt-4 gap-4">
+                             <button onClick={() => onEdit(entry)} className="flex-1 flex items-center justify-center gap-2 border border-blue-500 text-blue-400 font-semibold py-2 px-4 rounded-lg hover:bg-blue-500/10 transition-colors">
+                                 <EditIcon size={18} /> Editar
+                             </button>
+                             <button onClick={handleDelete} className="flex-1 bg-red-800/80 text-white font-semibold py-2 px-4 rounded-lg hover:bg-red-700/80 transition-colors">
+                                 Excluir
+                             </button>
+                         </div>
+                     </div>
+                 </div>
+             </div>
+        );
+    };
+    ]]></script>
+    
+    <script type="text/babel" data-type="module" data-module-path="/components/MaintenanceModal.tsx"><![CDATA[
+    import React, { useState, useEffect } from 'react';
+    import { Timestamp } from 'firebase/firestore';
+    import type { MaintenanceEvent } from '/types.ts';
+    import { ServiceType } from '/types.ts';
+    import { CloseIcon, OilCanIcon, TireIcon, EngineIcon, WrenchIcon, EditIcon } from '/components/Icons.tsx';
+
+    interface MaintenanceModalProps {
+        isOpen: boolean;
+        onClose: () => void;
+        onSave: (data: Omit<MaintenanceEvent, 'id'> & { id?: string }) => void;
+        onDelete: (id: string) => void;
+        log: MaintenanceEvent[];
+        currentMileage: number;
+    }
+
+    const getTodayString = () => {
+        const today = new Date();
+        const offset = today.getTimezoneOffset();
+        const todayWithOffset = new Date(today.getTime() - (offset * 60 * 1000));
+        return todayWithOffset.toISOString().split('T')[0];
+    };
+
+    const ServiceIcon = ({ type }: { type: ServiceType }) => {
+        switch (type) {
+            case ServiceType.OIL_CHANGE: return <OilCanIcon />;
+            case ServiceType.TIRE_CHANGE: return <TireIcon />;
+            case ServiceType.ENGINE_REVIEW: return <EngineIcon />;
+            default: return <WrenchIcon />;
+        }
+    };
+
+    export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({ isOpen, onClose, onSave, onDelete, log, currentMileage }) => {
+        const [view, setView] = useState<'list' | 'form'>('list');
+        const [eventToEdit, setEventToEdit] = useState<MaintenanceEvent | null>(null);
+        const [formData, setFormData] = useState({
+            date: getTodayString(),
+            serviceType: ServiceType.OIL_CHANGE,
+            mileage: '',
+            cost: '',
+            notes: ''
+        });
+
+        const sortedLog = [...log].sort((a, b) => b.date.toMillis() - a.date.toMillis());
+
+        useEffect(() => {
+            if (isOpen) {
+                setView('list');
+                setEventToEdit(null);
+            }
+        }, [isOpen]);
+
+        useEffect(() => {
+            if (eventToEdit) {
+                const eventDate = eventToEdit.date.toDate();
+                const offset = eventDate.getTimezoneOffset();
+                const dateWithOffset = new Date(eventDate.getTime() - (offset * 60 * 1000));
+
+                setFormData({
+                    date: dateWithOffset.toISOString().split('T')[0],
+                    serviceType: eventToEdit.serviceType,
+                    mileage: String(eventToEdit.mileage),
+                    cost: String(eventToEdit.cost),
+                    notes: eventToEdit.notes,
+                });
+                setView('form');
+            } else {
+                setFormData({
+                    date: getTodayString(),
+                    serviceType: ServiceType.OIL_CHANGE,
+                    mileage: currentMileage > 0 ? String(currentMileage) : '',
+                    cost: '',
+                    notes: ''
+                });
+            }
+        }, [eventToEdit, currentMileage]);
+        
+        const handleAddNew = () => {
+            setEventToEdit(null);
+            setView('form');
+        }
+
+        const handleDelete = (id: string) => {
+            if (window.confirm('Tem certeza que deseja excluir este registro de manutenção?')) {
+                onDelete(id);
+            }
+        }
+
+        const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+            const { name, value } = e.target;
+            setFormData(prev => ({ ...prev, [name]: value }));
+        };
+
+        const handleSubmit = (e: React.FormEvent) => {
+            e.preventDefault();
+            
+            const [year, month, day] = formData.date.split('-').map(Number);
+            const utcDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+            
+            const eventData = {
+                id: eventToEdit?.id,
+                date: Timestamp.fromDate(utcDate),
+                serviceType: formData.serviceType,
+                mileage: parseInt(formData.mileage) || 0,
+                cost: parseFloat(formData.cost) || 0,
+                notes: formData.notes,
+            };
+            onSave(eventData);
+            setView('list');
+        };
+
+        if (!isOpen) return null;
+
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 transition-opacity duration-300">
+                <div className="bg-[var(--theme-card-bg)] text-gray-200 rounded-xl shadow-2xl p-6 w-full max-w-2xl m-4 modal-content overflow-y-auto max-h-[95vh]">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-white">
+                            {view === 'list' ? 'Histórico de Manutenção' : eventToEdit ? 'Editar Registro' : 'Adicionar Registro'}
+                        </h2>
+                        <button onClick={onClose} className="text-gray-400 hover:text-white"><CloseIcon /></button>
+                    </div>
+
+                    {view === 'list' ? (
+                        <div className="space-y-4">
+                             <div className="flex justify-end">
+                                 <button onClick={handleAddNew} className="bg-gradient-to-br from-[var(--theme-gradient-start)] to-[var(--theme-gradient-end)] text-white font-semibold py-2 px-5 rounded-lg hover:opacity-90 transition-colors">
+                                    Adicionar Novo
+                                </button>
+                            </div>
+                            {sortedLog.length === 0 ? (
+                                <p className="text-center text-gray-400 py-8">Nenhum registro de manutenção encontrado.</p>
+                            ) : (
+                                <div className="space-y-3">
+                                    {sortedLog.map(event => (
+                                        <div key={event.id} className="bg-black/30 p-4 rounded-lg flex justify-between items-start">
+                                            <div className="flex items-center gap-4">
+                                                <div className="p-3 bg-gray-800 rounded-full"><ServiceIcon type={event.serviceType} /></div>
+                                                <div>
+                                                    <p className="font-bold text-white">{event.serviceType}</p>
+                                                    <p className="text-sm text-gray-400">{event.date.toDate().toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</p>
+                                                    <p className="text-sm text-gray-400">{event.mileage.toLocaleString('pt-BR')} km</p>
+                                                    {event.notes && <p className="text-sm text-gray-300 mt-1 italic">"{event.notes}"</p>}
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="font-semibold text-lg text-white">R$ {event.cost.toFixed(2)}</p>
+                                                <div className="flex gap-2 mt-2">
+                                                    <button onClick={() => setEventToEdit(event)} className="text-gray-400 hover:text-white"><EditIcon size={18} /></button>
+                                                    <button onClick={() => handleDelete(event.id)} className="text-gray-400 hover:text-red-400">
+                                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label htmlFor="date" className="block text-sm font-medium text-gray-300">Data</label>
+                                    <input type="date" name="date" id="date" value={formData.date} onChange={handleChange} required className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"/>
+                                </div>
+                                <div>
+                                   <label className="block text-sm font-medium text-gray-300">Tipo de Serviço</label>
+                                   <select name="serviceType" value={formData.serviceType} onChange={handleChange} className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]">
+                                        {Object.values(ServiceType).map(type => <option key={type} value={type}>{type}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label htmlFor="mileage" className="block text-sm font-medium text-gray-300">Odômetro (km)</label>
+                                    <input type="number" name="mileage" id="mileage" value={formData.mileage} onChange={handleChange} placeholder="135000" required className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"/>
+                                </div>
+                                <div>
+                                    <label htmlFor="cost" className="block text-sm font-medium text-gray-300">Custo (R$)</label>
+                                    <input type="number" step="0.01" name="cost" id="cost" value={formData.cost} onChange={handleChange} placeholder="350.00" required className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"/>
+                                </div>
+                            </div>
+                            <div>
+                                <label htmlFor="notes" className="block text-sm font-medium text-gray-300">Anotações</label>
+                                <textarea name="notes" id="notes" value={formData.notes} onChange={handleChange} rows={3} placeholder="Ex: Troca de filtro de ar e óleo" className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"></textarea>
+                            </div>
+                            <div className="flex justify-end pt-4 gap-4">
+                                <button type="button" onClick={() => setView('list')} className="text-gray-300 font-semibold py-2 px-5 rounded-lg hover:bg-gray-700/50">Cancelar</button>
+                                <button type="submit" className="bg-gradient-to-br from-[var(--theme-gradient-start)] to-[var(--theme-gradient-end)] text-white font-semibold py-2 px-5 rounded-lg hover:opacity-90 transition-colors">
+                                    {eventToEdit ? 'Salvar Alterações' : 'Salvar Registro'}
+                                </button>
+                            </div>
+                        </form>
+                    )}
+                </div>
+            </div>
+        );
+    };
+    ]]></script>
+    
+    <script type="text/babel" data-type="module" data-module-path="/components/MonthSummary.tsx"><![CDATA[
+    import React, { useState, useMemo } from 'react';
+    import type { ProcessedFuelEntry } from '/types.ts';
+    import { LoadingSpinner, SearchIcon } from '/components/Icons.tsx';
+    import { getAnalysisFromGemini } from '/services/geminiService.ts';
+
+    interface MonthSummaryProps {
+        entries: ProcessedFuelEntry[];
+        filterValue: string;
+    }
+
+    export const MonthSummary: React.FC<MonthSummaryProps> = ({ entries, filterValue }) => {
+        const [isLoading, setIsLoading] = useState(false);
+        const [analysisResult, setAnalysisResult] = useState('');
+
+        const monthName = useMemo(() => {
+            if (!filterValue || filterValue === 'all') return '';
+            const [year, month] = filterValue.split('-');
+            return new Date(Date.UTC(parseInt(year), parseInt(month) - 1))
+                .toLocaleString('pt-BR', { month: 'long', timeZone: 'UTC' });
+        }, [filterValue]);
+        
+        const stats = useMemo(() => {
+            const totalSpent = entries.reduce((acc, curr) => acc + curr.totalValue, 0);
+            const totalDistance = entries.reduce((acc, curr) => acc + curr.distance, 0);
+            const totalLiters = entries.reduce((acc, curr) => acc + curr.liters, 0);
+            const averageKmpl = totalLiters > 0 ? totalDistance / totalLiters : 0;
+            return { totalSpent, totalDistance, totalLiters, averageKmpl };
+        }, [entries]);
+
+        const handleAnalysisClick = async () => {
+            setIsLoading(true);
+            setAnalysisResult('');
+            const analysis = await getAnalysisFromGemini(entries, monthName);
+            setAnalysisResult(analysis);
+            setIsLoading(false);
+        };
+
+        if (!filterValue || filterValue === 'all' || entries.length === 0) {
+            return null;
+        }
+
+        return (
+            <section className="mb-8">
+                <div className="bg-[var(--theme-card-bg)] text-white p-6 rounded-2xl shadow-lg">
+                    <h3 className="text-3xl font-bold capitalize">{monthName}</h3>
+                    <p className="text-gray-400 mb-6">Resumo do seu desempenho no mês.</p>
+                    <div className="grid grid-cols-2 gap-5 text-left">
+                        <div className="bg-black/20 p-4 rounded-lg">
+                            <p className="text-sm text-gray-400">Gasto Total</p>
+                            <p className="text-2xl font-semibold">R$ {stats.totalSpent.toFixed(2)}</p>
+                        </div>
+                         <div className="bg-black/20 p-4 rounded-lg">
+                            <p className="text-sm text-gray-400">Distância Total</p>
+                            <p className="text-2xl font-semibold">{stats.totalDistance.toFixed(0)} km</p>
+                        </div>
+                         <div className="bg-black/20 p-4 rounded-lg">
+                            <p className="text-sm text-gray-400">Litros</p>
+                            <p className="text-2xl font-semibold">{stats.totalLiters.toFixed(2)} L</p>
+                        </div>
+                         <div className="bg-black/20 p-4 rounded-lg">
+                            <p className="text-sm text-gray-400">Média Geral</p>
+                            <p className="text-2xl font-semibold">{stats.averageKmpl.toFixed(1)} km/L</p>
+                        </div>
+                    </div>
+                    <div className="mt-6 text-center">
+                        <button 
+                            onClick={handleAnalysisClick} 
+                            disabled={isLoading}
+                            className="flex items-center justify-center w-full sm:w-auto sm:mx-auto gap-2 bg-gradient-to-br from-[var(--theme-gradient-start)] to-[var(--theme-gradient-end)] hover:opacity-90 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-300 disabled:opacity-50"
+                        >
+                            {isLoading ? <LoadingSpinner /> : <SearchIcon />}
+                            {isLoading ? 'Analisando...' : 'Analisar Mês com IA'}
+                        </button>
+                        {analysisResult && (
+                            <div className="mt-4 text-sm text-left bg-black/20 p-4 rounded-lg w-full gemini-analysis" dangerouslySetInnerHTML={{ __html: analysisResult }}></div>
+                        )}
+                    </div>
+                </div>
+            </section>
+        );
+    };
+    ]]></script>
+
+    <script type="text/babel" data-type="module" data-module-path="/components/TripModal.tsx"><![CDATA[
+    import React, { useState } from 'react';
+    import { CloseIcon, LoadingSpinner, SparklesIcon } from '/components/Icons.tsx';
+    import { getTripEstimateFromGemini } from '/services/geminiService.ts';
+
+    interface TripModalProps {
+        isOpen: boolean;
+        onClose: () => void;
+        overallAvgKmpl: number;
+    }
+
+    export const TripModal: React.FC<TripModalProps> = ({ isOpen, onClose, overallAvgKmpl }) => {
+        const [distance, setDistance] = useState('');
+        const [result, setResult] = useState('');
+        const [isLoading, setIsLoading] = useState(false);
+
+        const handleCalculate = async () => {
+            const distNum = parseInt(distance);
+            if (isNaN(distNum) || distNum <= 0) {
+                setResult("<p>Por favor, insira uma distância válida.</p>");
+                return;
+            }
+
+            setIsLoading(true);
+            setResult('');
+            const estimate = await getTripEstimateFromGemini(distNum, overallAvgKmpl);
+            setResult(estimate);
+            setIsLoading(false);
+        };
+        
+        const handleClose = () => {
+            setResult('');
+            setDistance('');
+            onClose();
+        }
+
+        if (!isOpen) return null;
+
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 transition-opacity duration-300">
+                <div className="bg-[var(--theme-card-bg)] text-gray-200 rounded-xl shadow-2xl p-8 w-full max-w-md m-4 modal-content">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-white">Estimar Custo da Viagem</h2>
+                        <button onClick={handleClose} className="text-gray-400 hover:text-white"><CloseIcon /></button>
+                    </div>
+                    <div className="space-y-4">
+                        <div>
+                            <label htmlFor="trip-distance" className="block text-sm font-medium text-gray-300">Distância da Viagem (km)</label>
+                            <input 
+                                type="number" 
+                                id="trip-distance" 
+                                value={distance}
+                                onChange={(e) => setDistance(e.target.value)}
+                                placeholder="Ex: 350" 
+                                className="mt-1 block w-full bg-black/20 border-white/10 text-white rounded-md shadow-sm focus:ring-[var(--theme-accent)] focus:border-[var(--theme-accent)]"
+                            />
+                        </div>
+                        <button 
+                            onClick={handleCalculate}
+                            disabled={isLoading}
+                            className="w-full flex items-center justify-center gap-2 bg-gradient-to-br from-[var(--theme-gradient-start)] to-[var(--theme-gradient-end)] text-white font-semibold py-3 px-5 rounded-lg shadow-md hover:opacity-90 transition-all duration-300 disabled:opacity-50"
+                        >
+                           {isLoading ? <LoadingSpinner /> : <SparklesIcon />}
+                           {isLoading ? 'Calculando...' : 'Calcular com IA'}
+                        </button>
+                        {result && (
+                            <div className="mt-4 text-sm bg-black/20 p-4 rounded-lg gemini-analysis" dangerouslySetInnerHTML={{ __html: result }}></div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    };
+    ]]></script>
+    
+    <script type="text/babel" data-type="module" data-module-path="/components/AnalyticsCharts.tsx"><![CDATA[
+    import React, { useMemo, useState } from 'react';
+    import type { ProcessedFuelEntry } from '/types.ts';
+    import {
+        ResponsiveContainer,
+        LineChart,
+        BarChart,
+        CartesianGrid,
+        XAxis,
+        YAxis,
+        Tooltip,
+        Legend,
+        Line,
+        Bar
+    } from 'recharts';
+
+    interface AnalyticsChartsProps {
+        entries: ProcessedFuelEntry[];
+    }
+
+    const CustomTooltip = ({ active, payload, label }: any) => {
+        if (active && payload && payload.length) {
+            return (
+                <div className="bg-gray-800/80 backdrop-blur-sm border border-gray-700 p-3 rounded-lg text-white">
+                    <p className="label font-bold mb-2">{label}</p>
+                    {payload.map((pld: any) => (
+                        <p key={pld.dataKey} style={{ color: pld.color }}>
+                            {`${pld.name}: ${pld.dataKey.includes('price') || pld.dataKey.includes('spent') ? 'R$ ' : ''}${pld.value.toFixed(pld.dataKey.includes('price') ? 3 : pld.dataKey.includes('spent') ? 2 : 1)}${pld.dataKey.includes('kmpl') ? ' km/L' : ''}`}
+                        </p>
+                    ))}
+                </div>
+            );
+        }
+        return null;
+    };
+
+
+    export const AnalyticsCharts: React.FC<AnalyticsChartsProps> = ({ entries }) => {
+        const years = useMemo(() => {
+            const uniqueYears = [...new Set(entries.map(e => e.date.getUTCFullYear()))];
+            return uniqueYears.sort((a: number, b: number) => b - a);
+        }, [entries]);
+
+        const [selectedYear, setSelectedYear] = useState(() => years.length > 0 ? years[0] : new Date().getFullYear());
+
+        const chartData = useMemo(() => {
+            const yearEntries = entries.filter(e => e.date.getUTCFullYear() === selectedYear);
+
+            const monthlyData: { [key: string]: { totalSpent: number, prices: number[], kmpls: number[], count: number } } = {};
+
+            for (const entry of yearEntries) {
+                const month = entry.date.getUTCMonth(); // 0-11
+                if (!monthlyData[month]) {
+                    monthlyData[month] = { totalSpent: 0, prices: [], kmpls: [], count: 0 };
+                }
+                monthlyData[month].totalSpent += entry.totalValue;
+                monthlyData[month].prices.push(entry.pricePerLiter);
+                if (entry.avgKmpl > 0) {
+                     monthlyData[month].kmpls.push(entry.avgKmpl);
+                }
+                monthlyData[month].count++;
+            }
+
+            const data = Array.from({ length: 12 }, (_, i) => {
+                const monthData = monthlyData[i];
+                const monthName = new Date(selectedYear, i).toLocaleString('pt-BR', { month: 'short' });
+                if (!monthData) {
+                    return { name: monthName, totalSpent: 0, avgPrice: 0, avgKmpl: 0 };
+                }
+                const avgPrice = monthData.prices.reduce((a, b) => a + b, 0) / monthData.prices.length;
+                const avgKmpl = monthData.kmpls.reduce((a, b) => a + b, 0) / (monthData.kmpls.length || 1);
+                
+                return {
+                    name: monthName.charAt(0).toUpperCase() + monthName.slice(1).replace('.', ''),
+                    totalSpent: monthData.totalSpent,
+                    avgPrice: avgPrice,
+                    avgKmpl: avgKmpl,
+                };
+            });
+
+            return data;
+
+        }, [entries, selectedYear]);
+        
+        if (entries.length === 0) {
+            return null;
+        }
+
+        return (
+            <section className="mb-8">
+                <div className="flex justify-between items-center mb-4 bg-gradient-to-r from-green-800/70 to-black/40 p-3 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold text-white">Análise Gráfica</h2>
+                    <select
+                        value={selectedYear}
+                        onChange={(e) => setSelectedYear(Number(e.target.value))}
+                        className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2"
+                    >
+                        {years.map(year => <option key={year} value={year}>{year}</option>)}
+                    </select>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                     <div className="bg-[var(--theme-card-bg)] p-4 rounded-xl shadow-lg h-80">
+                         <h3 className="text-lg font-semibold text-gray-200 mb-4 text-center">Gasto Mensal (R$)</h3>
+                        <ResponsiveContainer width="100%" height="90%">
+                            <BarChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 20 }}>
+                               <defs>
+                                    <linearGradient id="colorSpent" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#22c55e" stopOpacity={0.8}/>
+                                        <stop offset="95%" stopColor="#16a34a" stopOpacity={0.2}/>
+                                    </linearGradient>
+                                </defs>
+                                <XAxis dataKey="name" stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} />
+                                <YAxis stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `R$${value}`} />
+                                <Tooltip content={<CustomTooltip />} cursor={{fill: 'rgba(255,255,255,0.05)'}}/>
+                                <Bar dataKey="totalSpent" name="Gasto Total" fill="url(#colorSpent)" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                    <div className="bg-[var(--theme-card-bg)] p-4 rounded-xl shadow-lg h-80">
+                         <h3 className="text-lg font-semibold text-gray-200 mb-4 text-center">Consumo (km/L) e Preço (R$/L)</h3>
+                         <ResponsiveContainer width="100%" height="90%">
+                            <LineChart data={chartData} margin={{ top: 5, right: 20, left: -10, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                                <XAxis dataKey="name" stroke="#9ca3af" fontSize={12} tickLine={false} axisLine={false} />
+                                <YAxis yAxisId="left" stroke="#60a5fa" fontSize={12} tickLine={false} axisLine={false} />
+                                <YAxis yAxisId="right" orientation="right" stroke="#facc15" fontSize={12} tickLine={false} axisLine={false} />
+                                <Tooltip content={<CustomTooltip />}/>
+                                <Legend wrapperStyle={{fontSize: "12px", paddingTop: "20px"}} />
+                                <Line yAxisId="left" type="monotone" dataKey="avgKmpl" name="Média km/L" stroke="#60a5fa" strokeWidth={2} dot={{ r: 4, fill: '#60a5fa' }} activeDot={{ r: 6 }} />
+                                <Line yAxisId="right" type="monotone" dataKey="avgPrice" name="Preço/Litro" stroke="#facc15" strokeWidth={2} dot={{ r: 4, fill: '#facc15' }} activeDot={{ r: 6 }} />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            </section>
+        );
+    };
+    ]]></script>
+    
+    <script type="text/babel" data-type="module" data-module-path="/App.tsx"><![CDATA[
+    import React, { useState, useEffect, useMemo, useCallback } from 'react';
+    import { Timestamp } from 'firebase/firestore';
+    import type { RawFuelEntry, ProcessedFuelEntry, MaintenanceEvent } from '/types.ts';
+    import { ServiceType } from '/types.ts';
+    import { EntryModal } from '/components/EntryModal.tsx';
+    import { TripModal } from '/components/TripModal.tsx';
+    import { MaintenanceModal } from '/components/MaintenanceModal.tsx';
+    import { MonthSummary } from '/components/MonthSummary.tsx';
+    import { EntryDetailModal } from '/components/EntryDetailModal.tsx';
+    import { LoginScreen } from '/components/LoginScreen.tsx';
+    import { AnalyticsCharts } from '/components/AnalyticsCharts.tsx';
+    import { FuelPumpIcon, UserIcon, DollarSignIcon, GaugeIcon, RoadIcon, PlusIcon, CalculatorIcon, WrenchIcon, EditIcon, ExportIcon } from '/components/Icons.tsx';
+
+    const StatsCard: React.FC<{ icon: React.ReactNode; label: string; value: string; }> = ({ icon, label, value }) => (
+        <div className="stats-card bg-[var(--theme-card-bg)] p-4 rounded-xl flex items-center gap-4">
+            <div className="bg-black/30 p-3 rounded-full">{icon}</div>
+            <div>
+                <p className="text-sm text-gray-400">{label}</p>
+                <p className="text-xl font-bold text-white">{value}</p>
+            </div>
+        </div>
+    );
+
+    const getInitialSeedData = () => {
+        const initialEntries: RawFuelEntry[] = [
+            { id: '1', date: Timestamp.fromDate(new Date('2024-04-12T00:00:00Z')), totalValue: 100.00, pricePerLiter: 6.19, kmEnd: 134620, fuelType: 'GASOLINA' as any, notes: 'Posto Shell' },
+            { id: '2', date: Timestamp.fromDate(new Date('2024-04-14T00:00:00Z')), totalValue: 100.00, pricePerLiter: 6.19, kmEnd: 134843, fuelType: 'GASOLINA' as any, notes: '' },
+            { id: '3', date: Timestamp.fromDate(new Date('2024-04-16T00:00:00Z')), totalValue: 50.00, pricePerLiter: 5.89, kmEnd: 134932, fuelType: 'GASOLINA' as any, notes: '' },
+            { id: '4', date: Timestamp.fromDate(new Date('2024-05-22T00:00:00Z')), totalValue: 50.00, pricePerLiter: 6.19, kmEnd: 135010, fuelType: 'GASOLINA' as any, notes: 'Viagem' },
+            { id: '5', date: Timestamp.fromDate(new Date('2024-05-29T00:00:00Z')), totalValue: 273.82, pricePerLiter: 5.75, kmEnd: 135193, fuelType: 'GASOLINA' as any, notes: '' },
+            { id: '6', date: Timestamp.fromDate(new Date('2024-06-05T00:00:00Z')), totalValue: 150.00, pricePerLiter: 5.85, kmEnd: 135500, fuelType: 'GASOLINA' as any, notes: '' }
+        ];
+
+        const initialMaintenance: MaintenanceEvent[] = [
+            { id: 'm1', date: Timestamp.fromDate(new Date('2024-01-15T00:00:00Z')), serviceType: ServiceType.OIL_CHANGE, mileage: 130000, cost: 250, notes: 'Óleo 5W30 Sintético' },
+            { id: 'm2', date: Timestamp.fromDate(new Date('2023-10-20T00:00:00Z')), serviceType: ServiceType.TIRE_CHANGE, mileage: 125000, cost: 1200, notes: '4 Pneus Michelin' },
+        ];
+        
+        return { initialEntries, initialMaintenance };
+    };
+
+    const App: React.FC = () => {
+        const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('isLoggedIn') === 'true');
+        const [rawEntries, setRawEntries] = useState<RawFuelEntry[]>([]);
+        const [maintenanceLog, setMaintenanceLog] = useState<MaintenanceEvent[]>([]);
+        const [activeModal, setActiveModal] = useState<'entry' | 'trip' | 'maintenance' | 'detail' | null>(null);
+        const [selectedEntry, setSelectedEntry] = useState<ProcessedFuelEntry | null>(null);
+        const [entryToEdit, setEntryToEdit] = useState<RawFuelEntry | null>(null);
+        const [monthFilter, setMonthFilter] = useState<string>('all');
+        
+        const handleLogin = () => {
+            localStorage.setItem('isLoggedIn', 'true');
+            setIsLoggedIn(true);
+        };
+
+        useEffect(() => {
+            if (!isLoggedIn) return;
+            try {
+                const storedData = localStorage.getItem('fuelControlData');
+                if (storedData) {
+                    const { entries, maintenance } = JSON.parse(storedData);
+                    const parsedEntries = entries.map((e: any) => ({
+                        ...e,
+                        date: new Timestamp(e.date.seconds, e.date.nanoseconds),
+                    }));
+                     const parsedMaintenance = maintenance.map((m: any) => ({
+                        ...m,
+                        date: new Timestamp(m.date.seconds, m.date.nanoseconds),
+                    }));
+                    setRawEntries(parsedEntries);
+                    setMaintenanceLog(parsedMaintenance);
+                } else {
+                    const { initialEntries, initialMaintenance } = getInitialSeedData();
+                    setRawEntries(initialEntries);
+                    setMaintenanceLog(initialMaintenance);
+                }
+            } catch (error) {
+                console.error("Failed to load data from localStorage", error);
+                const { initialEntries, initialMaintenance } = getInitialSeedData();
+                setRawEntries(initialEntries);
+                setMaintenanceLog(initialMaintenance);
+            }
+        }, [isLoggedIn]);
+
+        useEffect(() => {
+            if (isLoggedIn) {
+                const dataToStore = {
+                    entries: rawEntries,
+                    maintenance: maintenanceLog,
+                };
+                localStorage.setItem('fuelControlData', JSON.stringify(dataToStore));
+            }
+        }, [rawEntries, maintenanceLog, isLoggedIn]);
+
+        const processedEntries = useMemo((): ProcessedFuelEntry[] => {
+            const sorted = [...rawEntries].sort((a, b) => a.date.toMillis() - b.date.toMillis() || a.kmEnd - b.kmEnd);
+            
+            const calculatedEntries = sorted.map((currentEntry, index) => {
+                const nextEntry = index < sorted.length - 1 ? sorted[index + 1] : null;
+                const kmStart = currentEntry.kmEnd;
+                const liters = currentEntry.pricePerLiter > 0 ? currentEntry.totalValue / currentEntry.pricePerLiter : 0;
+                let distance = 0;
+                let avgKmpl = 0;
+
+                if (nextEntry) {
+                    const kmEndAtNextRefuel = nextEntry.kmEnd;
+                    if (kmEndAtNextRefuel > kmStart) {
+                        distance = kmEndAtNextRefuel - kmStart;
+                    }
+                    if (distance > 0 && liters > 0) {
+                        avgKmpl = distance / liters;
+                    }
+                }
+                
+                return {
+                    ...currentEntry,
+                    date: currentEntry.date.toDate(),
+                    liters,
+                    kmStart,
+                    distance,
+                    avgKmpl,
+                };
+            });
+            return calculatedEntries.reverse();
+        }, [rawEntries]);
+        
+        const currentMileage = useMemo(() => {
+            return rawEntries.length > 0 ? Math.max(...rawEntries.map(e => e.kmEnd)) : 0;
+        }, [rawEntries]);
+
+        const filteredEntries = useMemo(() => {
+            if (monthFilter === 'all') return processedEntries;
+            return processedEntries.filter(e => {
+                const entryMonth = `${e.date.getUTCFullYear()}-${String(e.date.getUTCMonth() + 1).padStart(2, '0')}`;
+                return entryMonth === monthFilter;
+            });
+        }, [processedEntries, monthFilter]);
+
+        const displayStats = useMemo(() => {
+            const entriesToUse = monthFilter === 'all' ? processedEntries.filter(e => e.distance > 0) : filteredEntries.filter(e => e.distance > 0);
+            const totalSpent = filteredEntries.reduce((sum, e) => sum + e.totalValue, 0);
+            const totalDistance = entriesToUse.reduce((sum, e) => sum + e.distance, 0);
+            const totalLiters = entriesToUse.reduce((sum, e) => sum + e.liters, 0);
+            const averageKmpl = totalLiters > 0 ? totalDistance / totalLiters : 0;
+            return { totalSpent, totalDistance, averageKmpl };
+        }, [filteredEntries, processedEntries, monthFilter]);
+
+        const availableMonths = useMemo(() => {
+            const months = new Set(processedEntries.map(e => `${e.date.getUTCFullYear()}-${String(e.date.getUTCMonth() + 1).padStart(2, '0')}`));
+            const currentMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+            months.add(currentMonth);
+            return Array.from(months).sort((a: string, b: string) => b.localeCompare(a));
+        }, [processedEntries]);
+        
+        const maintenanceReminders = useMemo(() => {
+            const items = [
+                { id: ServiceType.OIL_CHANGE, name: 'Troca de Óleo', interval: 10000, warning: 1000 },
+                { id: ServiceType.TIRE_CHANGE, name: 'Troca de Pneus', interval: 25000, warning: 1000 },
+                { id: ServiceType.ENGINE_REVIEW, name: 'Revisão do Motor', interval: 50000, warning: 2000 }
+            ];
+
+            if (!currentMileage || maintenanceLog.length === 0) return [];
+            
+            return items.map(item => {
+                const lastService = maintenanceLog
+                    .filter(log => log.serviceType === item.id)
+                    .sort((a, b) => b.date.toMillis() - a.date.toMillis())[0];
+
+                if (!lastService) return null;
+
+                const nextServiceKm = lastService.mileage + item.interval;
+                const kmRemaining = nextServiceKm - currentMileage;
+
+                let status = 'ok';
+                let message = '';
+
+                if (currentMileage >= nextServiceKm) {
+                    status = 'overdue';
+                    message = `Vencido há ${Math.abs(kmRemaining).toLocaleString('pt-BR')} km`;
+                } else if (currentMileage >= nextServiceKm - item.warning) {
+                    status = 'warning';
+                    message = `Faltam ${kmRemaining.toLocaleString('pt-BR')} km`;
+                }
+
+                return { ...item, status, message };
+            }).filter((item): item is NonNullable<typeof item> => item !== null && item.status !== 'ok');
+
+        }, [currentMileage, maintenanceLog]);
+        
+        const handleCloseModal = useCallback(() => {
+            setActiveModal(null);
+            setSelectedEntry(null);
+            setEntryToEdit(null);
+        }, []);
+
+        const handleSaveEntry = useCallback((entryData: Omit<RawFuelEntry, 'id'> & { id?: string }) => {
+            setRawEntries(prev => {
+                if (entryData.id) {
+                    return prev.map(e => e.id === entryData.id ? { ...e, ...entryData } as RawFuelEntry : e);
+                }
+                return [...prev, { ...entryData, id: Date.now().toString() } as RawFuelEntry];
+            });
+            handleCloseModal();
+        }, [handleCloseModal]);
+
+        const handleDeleteEntry = useCallback((id: string) => {
+            setRawEntries(prev => prev.filter(e => e.id !== id));
+            handleCloseModal();
+        }, [handleCloseModal]);
+
+        const handleSaveMaintenance = useCallback((event: Omit<MaintenanceEvent, 'id'> & { id?: string }) => {
+            setMaintenanceLog(prev => {
+                if (event.id) {
+                    return prev.map(e => e.id === event.id ? { ...e, ...event } as MaintenanceEvent : e);
+                }
+                return [...prev, { ...event, id: Date.now().toString() } as MaintenanceEvent];
+            });
+        }, []);
+        
+        const handleDeleteMaintenance = useCallback((id: string) => {
+             setMaintenanceLog(prev => prev.filter(e => e.id !== id));
+        }, []);
+
+        const handleExportCSV = useCallback(() => {
+            if (rawEntries.length === 0) {
+                alert("Não há dados para exportar.");
+                return;
+            }
+
+            const headers = ['id', 'date', 'totalValue', 'pricePerLiter', 'kmEnd', 'fuelType', 'notes'];
+            
+            const formatDate = (timestamp: Timestamp) => {
+                const date = timestamp.toDate();
+                const year = date.getUTCFullYear();
+                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                const day = String(date.getUTCDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            };
+
+            const sortedEntries = [...rawEntries].sort((a, b) => a.date.toMillis() - b.date.toMillis());
+
+            const csvRows = [
+                headers.join(','),
+                ...sortedEntries.map(entry => {
+                    const sanitizedNotes = `"${(entry.notes || '').replace(/"/g, '""')}"`;
+                    const row = [
+                        entry.id,
+                        formatDate(entry.date),
+                        entry.totalValue.toFixed(2),
+                        entry.pricePerLiter.toFixed(3),
+                        entry.kmEnd,
+                        entry.fuelType,
+                        sanitizedNotes,
+                    ];
+                    return row.join(',');
+                })
+            ];
+
+            const csvString = csvRows.join('\n');
+            const blob = new Blob([`\uFEFF${csvString}`], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', 'meu_combustivel_export.csv');
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }, [rawEntries]);
+
+        const handleSelectEntry = (entry: ProcessedFuelEntry) => {
+            setSelectedEntry(entry);
+            setActiveModal('detail');
+        }
+        
+        const handleEditClick = (entry: ProcessedFuelEntry) => {
+             const rawEntryToEdit = rawEntries.find(e => e.id === entry.id);
+            if (rawEntryToEdit) {
+                setEntryToEdit(rawEntryToEdit);
+                setActiveModal('entry');
+            }
+        }
+        
+        if (!isLoggedIn) {
+            return <LoginScreen onLogin={handleLogin} />;
+        }
+
+        return (
+            <div className="bg-black text-gray-200 min-h-screen font-sans">
+                 <header className="bg-gradient-to-r from-green-600 to-black p-4 sticky top-0 z-30 shadow-lg">
+                    <div className="max-w-4xl mx-auto flex justify-between items-center">
+                        <div className="flex items-center gap-3">
+                            <FuelPumpIcon size={28} className="text-white" />
+                            <h1 className="text-2xl font-bold text-white tracking-wider">MEU COMBUSTÍVEL</h1>
+                        </div>
+                        <div className="flex items-center gap-2 p-2 rounded-full bg-black/25">
+                            <UserIcon />
+                        </div>
+                    </div>
+                </header>
+                
+                <main className="max-w-4xl mx-auto p-4 pb-24">
+                    <section className="mb-6">
+                        <div className="bg-gradient-to-r from-green-800/70 to-black/40 p-3 rounded-lg mb-4 shadow-md">
+                            <h2 className="text-xl font-semibold text-white">Visão Geral</h2>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                           <StatsCard icon={<RoadIcon />} label="KM Atual" value={currentMileage.toLocaleString('pt-BR')} />
+                           <StatsCard icon={<DollarSignIcon />} label={`Gasto ${monthFilter === 'all' ? 'Total' : 'do Mês'}`} value={`R$ ${displayStats.totalSpent.toFixed(2)}`} />
+                           <StatsCard icon={<GaugeIcon />} label={`Distância ${monthFilter === 'all' ? 'Total' : 'do Mês'}`} value={`${displayStats.totalDistance.toFixed(0)} km`} />
+                           <StatsCard icon={<GaugeIcon />} label={`Média ${monthFilter === 'all' ? 'Geral' : 'do Mês'}`} value={`${displayStats.averageKmpl.toFixed(1)} km/L`} />
+                        </div>
+                    </section>
+                    
+                    <AnalyticsCharts entries={processedEntries} />
+
+                    {maintenanceReminders.length > 0 && (
+                        <section className="mb-8">
+                            <div className="bg-gradient-to-r from-yellow-800/70 to-red-800/40 p-3 rounded-lg mb-4 shadow-md">
+                                <h2 className="text-xl font-semibold text-white">Lembretes de Manutenção</h2>
+                            </div>
+                            <div className="space-y-3">
+                                {maintenanceReminders.map(reminder => (
+                                    <button 
+                                        key={reminder.id}
+                                        onClick={() => setActiveModal('maintenance')}
+                                        className={`w-full text-left p-4 rounded-xl flex items-center gap-4 transition-transform hover:scale-[1.02] ${
+                                            reminder.status === 'warning'
+                                                ? 'bg-yellow-900/50 border border-yellow-700'
+                                                : 'bg-red-900/50 border border-red-700'
+                                        }`}
+                                    >
+                                        <div className={`p-2 rounded-full ${
+                                            reminder.status === 'warning' ? 'bg-yellow-500/20' : 'bg-red-500/20'
+                                        }`}>
+                                        <WrenchIcon />
+                                        </div>
+                                        <div>
+                                            <p className={`font-bold ${
+                                                reminder.status === 'warning' ? 'text-yellow-300' : 'text-red-300'
+                                            }`}>{reminder.name}</p>
+                                            <p className="text-sm text-gray-200">{reminder.message}</p>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        </section>
+                    )}
+                    
+                    <section className="mb-8">
+                        <div className="bg-gradient-to-r from-green-800/70 to-black/40 p-3 rounded-lg mb-4 shadow-md">
+                            <h2 className="text-xl font-semibold text-white">Ações Rápidas</h2>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                           <button onClick={() => { setEntryToEdit(null); setActiveModal('entry'); }} className="flex items-center justify-center gap-3 bg-[var(--theme-card-bg)] hover:bg-gray-800/80 p-4 rounded-xl transition-colors text-center">
+                                <PlusIcon /> <span className="font-semibold">Adicionar Abastecimento</span>
+                            </button>
+                            <button onClick={() => setActiveModal('trip')} className="flex items-center justify-center gap-3 bg-[var(--theme-card-bg)] hover:bg-gray-800/80 p-4 rounded-xl transition-colors text-center">
+                                <CalculatorIcon /> <span className="font-semibold">Estimar Viagem</span>
+                            </button>
+                            <button onClick={() => setActiveModal('maintenance')} className="flex items-center justify-center gap-3 bg-[var(--theme-card-bg)] hover:bg-gray-800/80 p-4 rounded-xl transition-colors text-center">
+                                <WrenchIcon /> <span className="font-semibold">Manutenção</span>
+                            </button>
+                            <button onClick={handleExportCSV} className="flex items-center justify-center gap-3 bg-[var(--theme-card-bg)] hover:bg-gray-800/80 p-4 rounded-xl transition-colors text-center">
+                                <ExportIcon /> <span className="font-semibold">Exportar CSV</span>
+                            </button>
+                        </div>
+                    </section>
+
+                    <section>
+                        <div className="flex justify-between items-center mb-4 bg-gradient-to-r from-green-800/70 to-black/40 p-3 rounded-lg shadow-md">
+                            <h2 className="text-xl font-semibold text-white">Histórico de Abastecimentos</h2>
+                            <select
+                                value={monthFilter}
+                                onChange={(e) => setMonthFilter(e.target.value)}
+                                className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2"
+                            >
+                                <option value="all">Todos os Meses</option>
+                                {availableMonths.map(month => (
+                                    <option key={month} value={month}>{new Date(month + '-02T00:00:00').toLocaleString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <MonthSummary entries={filteredEntries} filterValue={monthFilter} />
+
+                        <div className="space-y-3">
+                            {filteredEntries.length === 0 ? (
+                                 <div className="text-center text-gray-500 py-8 px-4 bg-[var(--theme-card-bg)] rounded-xl">
+                                     <h3 className="text-lg font-semibold text-white">Nenhum registro encontrado para este mês.</h3>
+                                     <p className="mt-2">Use o botão '+' para adicionar um abastecimento.</p>
+                                 </div>
+                            ) : filteredEntries.map(entry => (
+                                <div key={entry.id} className="bg-[var(--theme-card-bg)] p-4 rounded-xl flex items-center justify-between">
+                                    <div onClick={() => handleSelectEntry(entry)} className="flex items-center gap-4 cursor-pointer flex-grow">
+                                        <div className="text-center w-16 p-2 rounded-lg bg-black/30">
+                                            <p className="font-bold text-lg">{entry.date.getUTCDate()}</p>
+                                            <p className="text-xs uppercase">{entry.date.toLocaleString('pt-BR', { month: 'short', timeZone: 'UTC' })}</p>
+                                        </div>
+                                        <div>
+                                            <p className="font-bold text-lg">R$ {entry.totalValue.toFixed(2)}</p>
+                                            <p className="text-sm text-gray-400">{entry.distance > 0 ? `${entry.distance.toFixed(0)} km` : 'Aguardando próximo'}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-4">
+                                         <div className="text-right">
+                                            <p className="font-semibold text-lg">{entry.avgKmpl > 0 ? `${entry.avgKmpl.toFixed(1)}` : '--'}<span className="text-xs text-gray-400"> km/L</span></p>
+                                            <p className={`text-xs font-semibold px-2 py-0.5 rounded-full ${entry.fuelType === 'ETANOL' ? 'bg-green-800/50 text-green-300' : 'bg-red-800/50 text-red-300'}`}>{entry.fuelType}</p>
+                                        </div>
+                                        <button onClick={() => handleEditClick(entry)} className="p-2 text-gray-400 hover:text-white">
+                                            <EditIcon />
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                </main>
+                
+                <footer className="max-w-4xl mx-auto p-4 text-center text-gray-500 text-xs">
+                    <p>Desenvolvido por André Brito</p>
+                    <p>Versão 1.0</p>
+                </footer>
+
+                {activeModal === 'entry' && (
+                    <EntryModal
+                        isOpen={activeModal === 'entry'}
+                        onClose={handleCloseModal}
+                        onSave={handleSaveEntry}
+                        entryToEdit={entryToEdit}
+                        lastKm={currentMileage}
+                    />
+                )}
+                {activeModal === 'trip' && (
+                    <TripModal
+                        isOpen={activeModal === 'trip'}
+                        onClose={handleCloseModal}
+                        overallAvgKmpl={displayStats.averageKmpl}
+                    />
+                )}
+                {activeModal === 'maintenance' && (
+                    <MaintenanceModal
+                        isOpen={activeModal === 'maintenance'}
+                        onClose={handleCloseModal}
+                        onSave={handleSaveMaintenance}
+                        onDelete={handleDeleteMaintenance}
+                        log={maintenanceLog}
+                        currentMileage={currentMileage}
+                    />
+                )}
+                {selectedEntry && (
+                    <EntryDetailModal
+                        isOpen={activeModal === 'detail'}
+                        onClose={handleCloseModal}
+                        entry={selectedEntry}
+                        onDelete={handleDeleteEntry}
+                        onEdit={handleEditClick}
+                    />
+                )}
+            </div>
+        );
+    };
+
+    export default App;
+    ]]></script>
+    
+    <script type="text/babel" data-type="module" data-module-path="/index.tsx"><![CDATA[
+    import React from 'react';
+    import ReactDOM from 'react-dom/client';
+    import App from '/App.tsx';
+
+    const rootElement = document.getElementById('root');
+    if (!rootElement) {
+      throw new Error("Could not find root element to mount to");
+    }
+
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
+    ]]></script>
+
+    <script>
+    // Inlining Manifest
+    const manifestContent = {
+      "short_name": "Combustível",
+      "name": "Meu Combustível",
+      "description": "Um painel completo para rastrear despesas com combustível, analisar padrões de consumo com IA e gerenciar cronogramas de manutenção de veículos.",
+      "icons": [
+        { "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAAA... (example, not real)", "type": "image/png", "sizes": "192x192", "purpose": "any maskable" },
+        { "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAA... (example, not real)", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
+      ],
+      "start_url": ".",
+      "background_color": "#111827",
+      "display": "standalone",
+      "scope": ".",
+      "theme_color": "#111827"
+    };
+    const manifestBlob = new Blob([JSON.stringify(manifestContent)], { type: 'application/json' });
+    const manifestUrl = URL.createObjectURL(manifestBlob);
+    const link = document.createElement('link');
+    link.rel = 'manifest';
+    link.href = manifestUrl;
+    document.head.appendChild(link);
+
+    // Inlining Service Worker
+    const swContent = `
+    const CACHE_NAME = 'fuel-control-cache-v3';
+    const urlsToCache = [
+        '/',
+        './index.html',
+        'https://cdn.tailwindcss.com',
+        'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap'
+    ];
+
+    self.addEventListener('install', event => {
+        self.skipWaiting();
+        event.waitUntil(
+            caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache))
+        );
+    });
+
+    self.addEventListener('fetch', event => {
+        if (event.request.url.includes('generativelanguage.googleapis.com')) {
+             return fetch(event.request);
+        }
+    
+        event.respondWith(
+            caches.match(event.request).then(response => {
+                return response || fetch(event.request).then(fetchResponse => {
+                    return caches.open(CACHE_NAME).then(cache => {
+                        if(event.request.method === 'GET' && !event.request.url.startsWith('chrome-extension://')) {
+                            cache.put(event.request, fetchResponse.clone());
+                        }
+                        return fetchResponse;
+                    });
+                });
+            })
+        );
+    });
+
+    self.addEventListener('activate', event => {
+        const cacheWhitelist = [CACHE_NAME];
+        event.waitUntil(
+            caches.keys().then(cacheNames => {
+                return Promise.all(
+                    cacheNames.map(cacheName => {
+                        if (cacheWhitelist.indexOf(cacheName) === -1) {
+                            return caches.delete(cacheName);
+                        }
+                    })
+                );
+            })
+        );
+    });
+    `;
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            const swBlob = new Blob([swContent], { type: 'application/javascript' });
+            const swUrl = URL.createObjectURL(swBlob);
+            navigator.serviceWorker.register(swUrl).then(registration => {
+                console.log('ServiceWorker registration successful with scope: ', registration.scope);
+            }).catch(error => {
+                console.log('ServiceWorker registration failed: ', error);
+            });
+        });
+    }
+    </script>
 </body>
 </html>

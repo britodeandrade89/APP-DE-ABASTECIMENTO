@@ -1,4 +1,3 @@
-
 import { Timestamp } from 'firebase/firestore';
 
 export enum FuelType {
@@ -24,8 +23,19 @@ export interface ProcessedFuelEntry extends RawFuelEntry {
     avgKmpl: number;
 }
 
-export interface MaintenanceData {
-    oil: number;
-    tires: number;
-    engine: number;
+export enum ServiceType {
+    OIL_CHANGE = 'Troca de Óleo',
+    TIRE_CHANGE = 'Troca de Pneus',
+    ENGINE_REVIEW = 'Revisão do Motor',
+    GENERAL = 'Revisão Geral',
+    OTHER = 'Outro',
+}
+
+export interface MaintenanceEvent {
+    id: string;
+    date: Timestamp;
+    serviceType: ServiceType;
+    mileage: number;
+    cost: number;
+    notes: string;
 }
