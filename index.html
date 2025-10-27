@@ -1,0 +1,75 @@
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meu Combustivel AI</title>
+    <meta name="theme-color" content="#111827">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --base-bg: #111827; /* Dark Gray */
+            --theme-bg-start: rgba(22, 163, 74, 0.2); /* Green tint */
+            --theme-bg-end: rgba(185, 28, 28, 0.15); /* Red tint */
+            --theme-accent: #4ade80; /* Green-400 */
+            --theme-gradient-start: #16a34a; /* Green-600 */
+            --theme-gradient-end: #22c55e; /* Green-500 */
+            --theme-card-bg: #1f2937; /* Gray-800 */
+        }
+        body { 
+            font-family: 'Inter', sans-serif; 
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background-color: var(--base-bg);
+            background-image: radial-gradient(circle at top, var(--theme-bg-start), transparent 40%), radial-gradient(circle at bottom, var(--theme-bg-end), transparent 50%);
+            transition: background-image 0.5s ease-in-out;
+        }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        .modal-content {
+            animation: slide-up 0.3s ease-out;
+        }
+        @keyframes slide-up {
+            from {
+                transform: translateY(20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        .gemini-analysis p { margin-bottom: 0.75rem; }
+        .gemini-analysis strong { color: var(--theme-accent); }
+        .gemini-analysis ul { list-style-position: inside; padding-left: 0.5rem; }
+        .gemini-analysis li { margin-bottom: 0.25rem; }
+        .stats-card {
+            transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+        }
+        .stats-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.27.0",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.4.0/"
+  }
+}
+</script>
+</head>
+<body class="bg-[#111827] text-gray-200">
+    <div id="root"></div>
+</body>
+</html>
